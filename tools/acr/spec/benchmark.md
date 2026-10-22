@@ -22,19 +22,22 @@ tools/acr/benchmark-data/run.sh --problem 0002 --grade
 
 # Same with Pi.
 tools/acr/benchmark-data/run.sh --problem 0002 --config tools/acr/acr.pi.toml --grade
+
+# Same with Claude, keeping reports and logs in a chosen directory.
+tools/acr/benchmark-data/run.sh --problem 0002 --config tools/acr/acr.claude.toml --grade --work /tmp/acr-benchmark
 ```
 
 | Option | Meaning |
 |---|---|
 | `--problem <id>` | Select problems by full ID or prefix, e.g. `0002`. Repeatable. Default: all problems. |
-| `--grade` | Grade each report and print recall. Adds one model call per problem. |
+| `--grade` | Grade each report and print recall using a separate grader run per problem. |
 | `--backend`, `--config` | As for `run.sh`; see [Interface and output](interface.md#configuration). |
 | `--per-persona-context=auto\|yes\|no` | Override the profile's persona-context setting. |
-| `--timeout`, `--retries`, `--max-turns` | Override per-agent limits. |
+| `--timeout <seconds>` | Set a wall-clock limit per agent attempt. Reference profiles leave this unset. |
+| `--retries <count>` | Override retries of a complete agent run, in addition to its initial attempt. |
 | `--work <dir>` | Where to keep reports and logs. Default: a new directory under `/tmp/aster-code-review/benchmarks/` (`benchmarks-pi/` for Pi), or `$ACR_BENCHMARK_ROOT` / `$ACR_PI_BENCHMARK_ROOT`. |
 
-Problems run one after another.
-For each, the work directory keeps the report (`<problem>-<timestamp>.review.md`)
+For each problem, the work directory keeps the report (`<problem>-<timestamp>.review.md`)
 and the run records under `logs/` (see [Execution model](execution_model.md#run-records)).
 With `--grade`, the runner prints for each problem:
 

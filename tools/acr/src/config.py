@@ -2,7 +2,7 @@
 
 Configuration is deliberately boring: command-line callers pass an already
 parsed raw argument string, environment variables override ``acr.toml``, and
-provider credentials are only ever read from an environment variable.
+credentials come from environment variables or an SDK's own login store.
 """
 
 from __future__ import annotations
@@ -73,9 +73,6 @@ class ProviderConfig:
     adapter: str = "openai"
     api_key_env: str = "OPENAI_API_KEY"
     base_url_env: str = "OPENAI_BASE_URL"
-    base_url_value: str | None = None
-    response_input_exclude_fields: tuple[str, ...] = ()
-    retryable_http_error_types: tuple[str, ...] = ()
 
     @property
     def api_key(self) -> str | None:
@@ -83,7 +80,7 @@ class ProviderConfig:
 
     @property
     def base_url(self) -> str | None:
-        value = os.environ.get(self.base_url_env, self.base_url_value or "").strip()
+        value = os.environ.get(self.base_url_env, "").strip()
         return value or None
 
 
@@ -122,7 +119,6 @@ class RunConfig:
     per_persona_context: str = "auto"
     max_concurrency: int = 5
     timeout_seconds: float | None = None
-    max_turns: int | None = None
     retries: int = 2
     log_root: Path = field(default_factory=lambda: Path(os.environ.get("TMPDIR", "/tmp")) / "aster-code-review")
     output: Path | None = None
@@ -135,10 +131,8 @@ class RunConfig:
     model_retry_max_delay: float = 10.0
     model_retry_multiplier: float = 2.0
     model_retry_jitter: bool = True
-    # Local OpenAI Agents SDK trace settings.  These are appended to preserve
-    # positional compatibility with existing integrations.
+    # Local logging controls; only tracing_enabled is OpenAI-specific.
     tracing_enabled: bool = True
-    trace_include_sensitive_data: bool = True
     trace_max_content_bytes: int = 65536
     web_search_context_size: str = "medium"
     benchmark_remote: str | None = None
@@ -146,7 +140,7 @@ class RunConfig:
     pi: PiConfig = field(default_factory=PiConfig)
 
     def validate(self) -> "RunConfig":
-        if self.backend not in {"openai-agents", "pi-agent", "fake"}:
+        if self.backend not in {"openai-agents", "pi-agent", "claude-agent", "fake"}:
             raise ConfigError(f"unsupported backend: {self.backend}")
         if not self.review_model.strip():
             raise ConfigError("review_model must not be empty")
@@ -160,10 +154,6 @@ class RunConfig:
             raise ConfigError("provider api_key_env must not be empty")
         if not self.provider.base_url_env.strip():
             raise ConfigError("provider base_url_env must not be empty")
-        if any(not field.strip() for field in self.provider.response_input_exclude_fields):
-            raise ConfigError("provider response_input_exclude_fields must contain non-empty strings")
-        if any(not error_type.strip() for error_type in self.provider.retryable_http_error_types):
-            raise ConfigError("provider retryable_http_error_types must contain non-empty strings")
         if self.reasoning_effort not in {"low", "medium", "high", "max"}:
             raise ConfigError("reasoning_effort must be low, medium, high, or max")
         if self.postprocess_reasoning_effort not in {"low", "medium", "high", "max"}:
@@ -174,8 +164,6 @@ class RunConfig:
             raise ConfigError("max_concurrency must be positive")
         if self.timeout_seconds is not None and self.timeout_seconds <= 0:
             raise ConfigError("timeout_seconds must be positive when configured")
-        if self.max_turns is not None and self.max_turns < 1:
-            raise ConfigError("max_turns must be positive when configured")
         if self.retries < 0:
             raise ConfigError("retries cannot be negative")
         if self.model_retries < 0:
@@ -228,17 +216,6 @@ def _as_bool(value: Any) -> bool:
     if str(value).lower() in {"0", "false", "no", "off"}:
         return False
     raise ConfigError(f"invalid boolean value: {value!r}")
-
-
-def _as_optional_positive_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, str) and value.strip().lower() in {"", "none", "unlimited", "off"}:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ConfigError(f"invalid integer value: {value!r}") from exc
 
 
 def _as_optional_positive_float(value: Any) -> float | None:
@@ -316,6 +293,8 @@ def load_config(path: str | Path | None = None, *, overrides: Mapping[str, Any] 
     benchmark = dict(document.get("benchmark", {}))
     pi = dict(document.get("pi", {}))
     tools = _tool_config(document.get("tools"))
+    if "claude" in document:
+        raise ConfigError("Claude inherits the local CLI configuration; remove the [claude] table")
 
     def value(name: str, env: str, default: Any) -> Any:
         if overrides and name in overrides and overrides[name] is not None:
@@ -328,24 +307,12 @@ def load_config(path: str | Path | None = None, *, overrides: Mapping[str, Any] 
         adapter=str(os.environ.get("ACR_PROVIDER_ADAPTER", provider.get("adapter", "openai"))),
         api_key_env=str(provider.get("api_key_env", "OPENAI_API_KEY")),
         base_url_env=str(provider.get("base_url_env", "OPENAI_BASE_URL")),
-        base_url_value=str(provider.get("base_url", provider.get("base_url_value", ""))) or None,
-        response_input_exclude_fields=_as_string_tuple(
-            provider.get("response_input_exclude_fields"),
-            name="provider.response_input_exclude_fields",
-        ),
-        retryable_http_error_types=_as_string_tuple(
-            provider.get("retryable_http_error_types"),
-            name="provider.retryable_http_error_types",
-        ),
     )
     if overrides:
         provider_cfg = ProviderConfig(
             adapter=str(overrides.get("provider_adapter", provider_cfg.adapter)),
             api_key_env=str(overrides.get("api_key_env", provider_cfg.api_key_env)),
             base_url_env=str(overrides.get("base_url_env", provider_cfg.base_url_env)),
-            base_url_value=provider_cfg.base_url_value,
-            response_input_exclude_fields=provider_cfg.response_input_exclude_fields,
-            retryable_http_error_types=provider_cfg.retryable_http_error_types,
         )
     pi_cfg = PiConfig(
         node_command=str(os.environ.get("ACR_PI_NODE_COMMAND", pi.get("node_command", "node"))),
@@ -375,7 +342,6 @@ def load_config(path: str | Path | None = None, *, overrides: Mapping[str, Any] 
         timeout_seconds=_as_optional_positive_float(
             value("timeout_seconds", "ACR_TIMEOUT_SECONDS", None)
         ),
-        max_turns=_as_optional_positive_int(value("max_turns", "ACR_MAX_TURNS", None)),
         retries=int(value("retries", "ACR_RETRIES", 2)),
         model_retries=int(value("model_retries", "ACR_MODEL_RETRIES", 3)),
         model_retry_initial_delay=float(
@@ -392,12 +358,6 @@ def load_config(path: str | Path | None = None, *, overrides: Mapping[str, Any] 
         ),
         tracing_enabled=_as_bool(
             os.environ.get("ACR_TRACING_ENABLED", tracing.get("enabled", True))
-        ),
-        trace_include_sensitive_data=_as_bool(
-            os.environ.get(
-                "ACR_TRACE_INCLUDE_SENSITIVE_DATA",
-                tracing.get("include_sensitive_data", True),
-            )
         ),
         trace_max_content_bytes=int(
             os.environ.get(

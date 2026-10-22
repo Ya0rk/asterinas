@@ -179,7 +179,6 @@ class PiAgentBackend:
                     if request.timeout_seconds is not None
                     else None
                 ),
-                "max_turns": request.max_turns,
                 "tools": tool_specs,
                 "trusted_extensions": list(self.config.pi.trusted_extensions),
                 "keep_native_sessions": self.config.pi.keep_native_sessions,
@@ -215,11 +214,7 @@ class PiAgentBackend:
                     request.persona,
                     output_sha256=_sha(raw),
                     status="completed",
-                    data={
-                        "output": value
-                        if self.config.trace_include_sensitive_data
-                        else f"[omitted sha256={_sha(raw)} length={len(raw)}]"
-                    },
+                    data={"output": value},
                 ),
             )
             self._event(

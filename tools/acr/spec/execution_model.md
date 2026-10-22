@@ -52,7 +52,7 @@ Target resolution prepares the review input for each mode:
 
 This text is saved as `artifacts/canonical-input.txt` in log dir.
 Resolution also produces a list of reviewed paths used for activation.
-The argument syntax is specified in [Interface and output](interface.md#head-is-the-head).
+The argument syntax is specified in [Interface and output](interface.md#reviewing-the-current-checkout).
 
 ## Persona activation
 
@@ -88,8 +88,9 @@ so remaining stages process them in the same way.
 Each persona agent's instructions consist of:
 
 1. shared [review contract](../src/prompts/personas/pass_contract.md);
-2. persona's [prompt](../src/prompts/personas/);
-3. persona's guideline catalog with its digest
+2. `Repository Layout` and `Architecture Notes`, read directly from [`AGENTS.md`](../../../AGENTS.md);
+3. persona's [prompt](../src/prompts/personas/);
+4. persona's guideline catalog with its digest
    (see [Coding guidelines](coding_guidelines.md#loading-rules-on-demand)).
 
 The instructions are identical across reviews and are kept separate from the review input,
@@ -165,14 +166,19 @@ Its main contents are:
 | `main.jsonl`, `sdk-trace.jsonl` | Event log and trace for the whole run. |
 | `usage.json` | Token usage summed over all agents. |
 | `artifacts/` | The review input, prompts, each persona's raw findings, the result of each stage, and the final report. |
-| `agents/<role>/` | Per-agent events, transcript, raw response, and token usage. |
+| `agents/personas/<persona>/` | Per-persona events, transcript, final response, and token usage. |
+| `agents/<stage>/` | Corresponding records for combined review and later model-backed stages. |
 | `pi-sessions/` | Pi session files (`pi-agent` backend only). |
 
-API keys and other credentials are hidden in logs.
-Text that exceeds the log size limit is shortened when recorded.
-Token counts that a provider does not report are marked as unreported, not recorded as zero.
-Only reasoning summaries returned by the provider can be recorded;
-a model's hidden reasoning is not available.
+Within an agent's directory:
+
+| File | Contents |
+|---|---|
+| `events.jsonl` | Agent lifecycle, tool calls, and backend events. |
+| `transcript.jsonl` | Tool events and backend-supplied reply or progress events. |
+| `sdk-trace.jsonl` | OpenAI SDK spans, including model requests, responses, and SDK tool events, when tracing is enabled. |
+| `response-<agent-run-id>.json` | The agent's final structured result. |
+| `usage.json` | Reported token counts, cost, and timing. |
 
 ## Backends
 
@@ -180,15 +186,16 @@ The orchestrator talks to models only through the interface in [`agents/protocol
 so it does not depend on any SDK.
 [`agents/backend_factory.py`](../src/agents/backend_factory.py) selects one of:
 
-- [`openai-agents`](../src/agents/openai_agents/backend.py): the OpenAI Agents SDK with any OpenAI-compatible endpoint;
+- [`openai-agents`](../src/agents/openai_agents/backend.py): the OpenAI Agents SDK backend, see [OpenAI Agents backend](openai_agents_backend.md);
 - [`pi-agent`](../src/agents/pi/backend.py): one fresh Pi SDK session per call, see [Pi backend](pi_backend.md);
+- [`claude-agent`](../src/agents/claude/backend.py): one fresh Claude SDK client per call, see [Claude backend](claude_backend.md);
 - [`fake`](../src/agents/fake.py): no model; returns empty results, for tests.
 
 `review_model` selects the model for persona reviews, whether separate or combined.
 `postprocess_model` selects the model for verification, consolidation, summary, and benchmark grading.
-Both backends follow this split; changing one setting does not change the other.
+All backends follow this split; changing one setting does not change the other.
 
 Retries work at two levels.
 `retries` restarts a whole agent from scratch after a failure or invalid output.
 `model_retries` retries a single failed model request on the `openai-agents` backend;
-on `pi-agent`, Pi handles request retries itself.
+on `pi-agent` and `claude-agent`, their runtimes(PI CLI/Claude CLI) handle request retries themselves.

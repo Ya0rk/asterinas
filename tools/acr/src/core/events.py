@@ -119,7 +119,11 @@ class EventLogger:
             startup = data.get("startup_duration_ms")
             if isinstance(startup, int):
                 self._startup_duration_ms[agent_run_id] = startup
-        if event_type == "completed" and isinstance(data.get("usage"), Mapping):
+        if (
+            event_type in {"completed", "error", "cancelled"}
+            and isinstance(data.get("usage"), Mapping)
+            and (event_type == "completed" or data["usage"])
+        ):
             self._record_usage(
                 scope=scope,
                 stage=stage,

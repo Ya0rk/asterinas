@@ -33,6 +33,10 @@ def create_backend(
             run_root=run_root,
             broker=broker,
         )
+    if config.backend == "claude-agent":
+        from .claude.backend import ClaudeAgentBackend
+
+        return ClaudeAgentBackend(config, repo_root=repo_root, broker=broker)
     raise ValueError(f"unsupported backend: {config.backend}")
 
 

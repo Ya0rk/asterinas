@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from acr.agents.openai_agents.tools import function_tools
 from acr.core.contracts import PERSONAS
 from acr.tools.builtin import default_provider
 from acr.tools.git import GitBlameTool, GitDiffTool, GitLogTool, GitShowTool
@@ -81,7 +82,7 @@ class ToolSpecTests(unittest.TestCase):
             max_output_bytes=1234,
         )
 
-        for tool in broker.function_tools():
+        for tool in function_tools(broker):
             self.assertIn("7.5 seconds", tool.description, tool.name)
             self.assertIn("1234 bytes", tool.description, tool.name)
 
@@ -140,7 +141,7 @@ class RepositoryToolTests(unittest.TestCase):
             (root / "a.txt").write_text("alpha\n", encoding="utf-8")
             (root / "b.txt").write_text("beta\n", encoding="utf-8")
             broker = ToolBroker(default_provider(root), allowed={"source.read"})
-            tool = broker.function_tools()[0]
+            tool = function_tools(broker)[0]
             requests = [
                 {"path": "a.txt", "start": 1, "end": 10},
                 {"path": "missing.txt", "start": 1, "end": 10},

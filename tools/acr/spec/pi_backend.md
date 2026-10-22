@@ -7,7 +7,16 @@ for example a relay provider or a Claude subscription.
 It changes only how a single agent call is executed;
 persona activation, scheduling, validation, assembly, and the report are the same as with any other backend.
 
-## Setup
+## What's in this directory
+
+| Component | Role |
+|---|---|
+| [`agents/pi/backend.py`](../src/agents/pi/backend.py) | Turns an ACR agent request into a bridge `run` message and the reply back into a response. |
+| [`agents/pi/client.py`](../src/agents/pi/client.py) | Owns the Node process, the message stream, tool forwarding, and cleanup. |
+| [`agents/pi/protocol.py`](../src/agents/pi/protocol.py) | Validates capabilities and normalizes usage. |
+| [`agents/pi/runtime/bridge.mjs`](../src/agents/pi/runtime/bridge.mjs) | Creates the Pi session, registers tools, forwards tool calls to Python, and returns the structured result. |
+
+## How to use this backend
 
 Use the Asterinas development Docker container;
 Pi and all required dependencies are preinstalled.
@@ -16,27 +25,19 @@ Pi and all required dependencies are preinstalled.
    ACR uses Pi's saved credentials and model configuration from the agent directory
    (by default `~/.pi/agent`);
    credentials do not go into the ACR profile.
-2. Copy [`acr.pi.toml`](../acr.pi.toml), set `review_model` and `postprocess_model` to Pi `provider/model-id` references, and run:
+2. Edit [`acr.pi.toml`](../acr.pi.toml), set `review_model` and `postprocess_model` to Pi `provider/model-id` references, and run:
 
-   ```sh
-   tools/acr/run.sh --config my-acr.pi.toml diff origin/main /tmp/review.md
-   ```
+```sh
+tools/acr/run.sh --config tools/acr/acr.pi.toml diff origin/main /tmp/review.md
+```
 
-The Pi-specific settings are:
+A minimal model selection contains:
 
 ```toml
 [agent]
 backend = "pi-agent"
 review_model = "provider/model-id"       # persona reviews
 postprocess_model = "provider/model-id"  # verification, consolidation, summary, benchmark grading
-
-[pi]
-node_command = "node"                # or ACR_PI_NODE_COMMAND
-agent_dir = "~/.pi/agent"            # or ACR_PI_AGENT_DIR
-bridge_startup_timeout_seconds = 30
-shutdown_grace_seconds = 5
-keep_native_sessions = true
-trusted_extensions = []              # extra Pi extensions to load; empty by default
 ```
 
 ACR fails before calling the model if the model is unknown to Pi
@@ -58,6 +59,8 @@ one fresh Pi agent ── tool calls ──► back to Python
 ```
 
 The bridge creates one Pi session and sends it review task directly.
+It imports the Pi SDK library and calls `createAgentSession()`;
+it does not start interactive `pi` CLI.
 Python controls persona scheduling.
 
 So, with one agent per persona, each persona gets its own process and context;
@@ -65,36 +68,17 @@ with `per_persona_context = "no"`, all personas share one agent.
 A retry starts a new process; no failed transcript is reused.
 One process per call makes cleanup and log ownership unambiguous.
 
-## What the Pi agent sees
+## Instructions and input
 
-The agent's system prompt is replaced entirely with:
+See [Agent instructions](execution_model.md#agent-instructions)
+for the shared instruction contents and stage-specific prompts.
 
-1. the same instructions the OpenAI backend would use;
-2. a short suffix requiring the final result to be submitted through `structured_output`,
-   a tool whose arguments match the stage's output schema.
-
+The bridge replaces Pi's default system prompt through `DefaultResourceLoader.systemPromptOverride`,
+using the shared instructions plus a short contract for submitting the result through `structured_output`.
+It sends the task input separately through `session.prompt()`.
 Pi's project instructions, global prompt files, and skills are not loaded.
-Each session starts with no previous conversation.
-The first user message is only the stage input: review input for a persona,
-or structured findings for later stages.
 
-## Structured output
-
-Pi agent submits its final result through a tool named `structured_output`.
-Each stage defines the required fields and the kind of data allowed in each field.
-Pi validates the tool arguments before accepting them.
-After completing the task,
-the agent calls structured_output once to submit its result,
-without calling other tools at the same time.
-A successful submission ends the task;
-no further model response is needed.
-If the agent does not submit a result or submits more than one, the attempt fails.
-
-Python still validates the returned value against the Pydantic schema and stage rules
-before using it in the report.
-An invalid result remains an error, not an empty list of findings.
-
-## Tools and the write boundary
+## Tools and write boundary
 
 Pi agent gets none of Pi's built-in tools.
 `read`, `bash`, `edit`, `write`, nested subagents, and supervisor or intercom tools are all disabled.
@@ -102,9 +86,17 @@ Pi agent gets none of Pi's built-in tools.
 Instead, Python sends the role's ACR tools from the `[tools]` allowlist,
 each with its name (for example `source_read` for `source.read`), description, and input schema.
 The bridge registers them directly as Pi SDK custom tools alongside `structured_output`.
-Python executes tool calls from the Pi agent,
-but only if the tool is allowed for that agent.
-Both backends use the same Python tool implementations.
+The bridge supplies them in `createAgentSession(customTools=...)` and disables built-in tools.
+Each custom tool's `execute` callback sends a `tool.call` JSONL message to Python.
+Python invokes the role-scoped `ToolBroker` and returns a `tool.result` message.
+The bridge also checks that the session's active tools match the expected names.
+Combined mode uses the union of its personas' allowlists.
+
+This is ACR's own bridge protocol, not MCP.
+The [OpenAI backend](openai_agents_backend.md#tools-and-the-write-boundary) uses direct `FunctionTool` callbacks;
+the [Claude backend](claude_backend.md#tools-and-the-write-boundary) uses an SDK-managed MCP server.
+All three call the same Python repository-tool implementations through `ToolBroker`,
+which enforces the allowlist, timeouts, and output limits.
 `guideline.show` works the same way,
 so the agent cannot bypass the digest and short-name checks
 (see [Coding guidelines](coding_guidelines.md#loading-rules-on-demand)).
@@ -136,17 +128,11 @@ Oversized messages and unknown or mismatched IDs are errors.
 On cancellation, Python asks the bridge to abort the Pi session,
 waits up to `shutdown_grace_seconds` for it to exit, then terminates and finally kills the process.
 
-## Logs and usage
+## Logs and cost
 
 Progress, tool calls and results, the final reply, and diagnostics
-are written to the same per-agent event and transcript files as with the OpenAI backend
+are recorded by default in the per-agent event and transcript files
 (see [Execution model](execution_model.md#run-records)).
-ACR saves the usage statistics provided by Pi, such as token counts, cost, and elapsed time.
+The final structured result is also saved as `response-<agent-run-id>.json`.
+ACR saves the cost statistics provided by Pi, such as token counts and elapsed time.
 Missing statistics are marked as unavailable, not zero.
-
-| Component | Role |
-|---|---|
-| [`agents/pi/backend.py`](../src/agents/pi/backend.py) | Turns an ACR agent request into a bridge `run` message and the reply back into a response. |
-| [`agents/pi/client.py`](../src/agents/pi/client.py) | Owns the Node process, the message stream, tool forwarding, and cleanup. |
-| [`agents/pi/protocol.py`](../src/agents/pi/protocol.py) | Validates capabilities and normalizes usage. |
-| [`agents/pi/runtime/bridge.mjs`](../src/agents/pi/runtime/bridge.mjs) | Creates the Pi session, registers tools, forwards tool calls to Python, and returns the structured result. |

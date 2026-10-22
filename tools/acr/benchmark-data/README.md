@@ -3,7 +3,7 @@
 [`src/benchmark/runner.py`](../src/benchmark/runner.py) uses detached Git worktrees and overlays only the reviewer package;
 benchmark answer keys stay outside the reviewer checkout. The `fake` backend
 exercises the control plane without a model; `openai-agents` runs a real review.
-Install the optional `acr[benchmark]` dependency for YAML problem loading.
+The YAML loader is installed with ACR's regular Python dependencies.
 
 Run from the root of your Asterinas checkout:
 

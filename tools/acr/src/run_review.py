@@ -14,7 +14,7 @@ from .core.orchestrator import run_review
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run Aster Code Review")
     parser.add_argument("raw_args", nargs="+", help="review interface tokens; output is last positional")
-    parser.add_argument("--backend", choices=("openai-agents", "pi-agent", "fake"), default=None)
+    parser.add_argument("--backend", choices=("openai-agents", "pi-agent", "claude-agent", "fake"), default=None)
     parser.add_argument("--config", type=Path, default=None)
     args, passthrough = parser.parse_known_args(argv)
     # Interface flags such as --overwrite belong to the raw review argument

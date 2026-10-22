@@ -29,7 +29,7 @@ def _role_instructions(role: str, version: str) -> AgentInstructions:
 
 
 def _request(role: str, instructions: str, input_text: str, output_schema, config: RunConfig, *, persona: str | None = None) -> AgentRequest:
-    return AgentRequest(role=role, instructions=instructions, input_text=input_text, output_schema=output_schema, model=config.model_for(role), max_turns=config.max_turns, timeout_seconds=config.timeout_seconds, persona=persona)
+    return AgentRequest(role=role, instructions=instructions, input_text=input_text, output_schema=output_schema, model=config.model_for(role), timeout_seconds=config.timeout_seconds, persona=persona)
 
 
 def persona_request(persona: str, prompt: str, config: RunConfig) -> AgentRequest:
@@ -79,17 +79,17 @@ class AgentFactory:
             input=AgentInput.from_text(content),
             output_type=output_type,
             tool_policy=policy or self._policy_for(role, persona),
-            run_limits=RunLimits(self.config.max_turns, self.config.timeout_seconds, self.config.retries),
+            run_limits=RunLimits(timeout_seconds=self.config.timeout_seconds, retries=self.config.retries),
             role=role,
             persona=persona,
             model=model,
         )
 
     def persona(self, instructions: AgentInstructions, review_input: AgentInput, *, persona: str) -> AgentInvocation:
-        return AgentInvocation(instructions, review_input, CommentsEnvelope, self._policy_for("persona", persona), RunLimits(self.config.max_turns, self.config.timeout_seconds, self.config.retries), "persona", persona, self.config.review_model)
+        return AgentInvocation(instructions, review_input, CommentsEnvelope, self._policy_for("persona", persona), RunLimits(timeout_seconds=self.config.timeout_seconds, retries=self.config.retries), "persona", persona, self.config.review_model)
 
     def combined(self, instructions: AgentInstructions, review_input: AgentInput, *, personas: tuple[str, ...]) -> AgentInvocation:
-        return AgentInvocation(instructions, review_input, CommentsEnvelope, self._policy_for_combined(personas), RunLimits(self.config.max_turns, self.config.timeout_seconds, self.config.retries), "persona", None, self.config.review_model)
+        return AgentInvocation(instructions, review_input, CommentsEnvelope, self._policy_for_combined(personas), RunLimits(timeout_seconds=self.config.timeout_seconds, retries=self.config.retries), "persona", None, self.config.review_model)
 
     def verification(self, content: str) -> AgentInvocation:
         instructions = _role_instructions("verification", "verification-v2")

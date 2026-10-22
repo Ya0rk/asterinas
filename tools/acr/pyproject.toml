@@ -5,18 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aster-code-review-acr"
 version = "0.1.0"
-description = "OpenAI Agents SDK runtime for Aster Code Review"
+description = "Aster-Code-Review"
 requires-python = ">=3.11"
 dependencies = [
   "pydantic>=2.0,<3",
   "openai-agents[any-llm]>=0.22,<0.23",
+  "claude-agent-sdk==0.2.143",
+  "pyyaml>=6.0",
 ]
 
-[project.optional-dependencies]
-benchmark = ["pyyaml>=6.0"]
-
 [tool.setuptools]
-packages = ["acr", "acr.core", "acr.agents", "acr.agents.openai_agents", "acr.agents.pi", "acr.tools", "acr.benchmark"]
+packages = ["acr", "acr.core", "acr.agents", "acr.agents.openai_agents", "acr.agents.pi", "acr.agents.claude", "acr.tools", "acr.benchmark"]
 
 [tool.setuptools.package-dir]
 acr = "src"

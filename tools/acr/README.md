@@ -15,19 +15,21 @@ so improvement to design and changes to guidelines are judged by evidence.
 
 ## Quick start
 
-ACR is a tool, 
-you trigger it from either inside an agent session by [ACR_SKILL](../../.agents/skills/aster-code-review/SKILL.md), 
+You can trigger it from either inside an agent session by [ACR_SKILL](../../.agents/skills/aster-code-review/SKILL.md), 
 or from a shell.
-Run from the root of Asterinas.
 
-First setup env:
+There are three backends in ACR.
+1. For Openai Agents SDK, setup env firstly:
 
 ```sh
 export OPENAI_API_KEY='...'
 export OPENAI_BASE_URL='...'
 ```
 
-Review the commits your branch added on top of `origin/main`:
+If you use Pi or Claude, skip this step, make sure your chosen agent is configured locally,
+and add `--config tools/acr/acr.pi.toml` (Pi) or `--config tools/acr/acr.claude.toml` (Claude) when running ACR.
+
+2. Running ACR: review the commits your branch added on top of `origin/main`.
 
 ```sh
 tools/acr/run.sh diff origin/main /tmp/acr-review.md
@@ -85,17 +87,14 @@ See [Interface and output](spec/interface.md) for the full syntax.
 
 | Backend | Use it for | Setup |
 |---|---|---|
-| `openai-agents` (default) | Real reviews through any OpenAI-compatible API. | Set `OPENAI_API_KEY` (and optionally `OPENAI_BASE_URL`). The default profile is [`acr.toml`](acr.toml). |
-| `pi-agent` | Reviews using subscription-based access or Claude models through Pi. | In the development Docker container, login to your provider in Pi first, then pass `--config tools/acr/acr.pi.toml`. See [Pi backend](spec/pi_backend.md). |
+| `openai-agents` (default) | Rviews through OpenAI or compatible model APIs. | Set `OPENAI_API_KEY` and  `OPENAI_BASE_URL`. The default profile is [`acr.toml`](acr.toml). See [OpenAI Agents backend](spec/openai_agents_backend.md#how-to-use-this-backend). |
+| `pi-agent` | Reviews using Pi agent. | Login to your provider in Pi first, then pass `--config tools/acr/acr.pi.toml`. See [Pi backend](spec/pi_backend.md#how-to-use-this-backend). |
+| `claude-agent` | Reviews through the Claude Agent SDK, inheriting the local Claude CLI configuration. | Use [`acr.claude.toml`](acr.claude.toml). See [Claude backend](spec/claude_backend.md#how-to-use-this-backend). |
 
-Select a backend with `--backend=<name>` or the `backend` key of the profile.
-A **profile** is a TOML file that sets the model, reasoning effort, concurrency, timeouts, and tool allowlists.
-
-If no profile toml is specified, 
-ACR will default to using codex with `tools/acr/acr.toml` and gpt-5.5-sol medium for review.
-
-To change model, copy a profile, edit it, and pass it with `--config`.
-`ACR_*` override the corresponding profile values.
+Select a backend with `--backend=<name>` or the `--config [path_to_toml]`.
+If no profile and backend toml is specified, 
+ACR will default to using codex with `tools/acr/acr.toml` and gpt-5.5 medium for review.
+You can modify config in the profile file.
 API key never go into a profile.
 See [Configuration](spec/interface.md#configuration) for details.
 
@@ -125,7 +124,7 @@ See the [execution model](spec/execution_model.md) for details.
 | Path | Contents |
 |---|---|
 | [`run.sh`](run.sh) | Command-line entry point. |
-| [`acr.toml`](acr.toml), [`acr.pi.toml`](acr.pi.toml) | Reference profiles for the `openai-agents` and `pi-agent` backends. |
+| [`acr.toml`](acr.toml), [`acr.pi.toml`](acr.pi.toml), [`acr.claude.toml`](acr.claude.toml) | Reference profiles for the OpenAI, Pi, and Claude backends. |
 | [`src/`](src/) | The `acr` Python package; [`core/`](src/core/) contains the review workflow, its steps, and shared data types. |
 | [`benchmark-data/`](benchmark-data/) | Known-defect problems ([`problems.yaml`](benchmark-data/problems.yaml)) and the benchmark entry point. |
 | [`tests/`](tests/) | Model-free tests. |

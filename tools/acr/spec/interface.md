@@ -12,8 +12,8 @@ tools/acr/run.sh [OPTIONS] files <path[:lines] ...> <output>
 | `diff <base>` / `files <targets>` | What to review. See the two modes below. |
 | `<output>` | Report path. Always the last positional argument. A relative path is resolved from the repository root. |
 | `--overwrite` | Replace an existing report. Without it, ACR stops before rewriting. |
-| `--per-persona-context=auto\|yes\|no` | Review personas separately or together. Overrides the profile; see [Persona contexts](#configuration). |
-| `--backend=NAME` | `openai-agents`, `pi-agent`, or `fake`. Overrides the profile. |
+| `--per-persona-context=auto\|yes\|no` | Review personas separately or together. See [Persona contexts](#configuration). |
+| `--backend=NAME` | `openai-agents`, `pi-agent`, `claude-agent`, or `fake`. |
 | `--config PATH` | Profile to use. See [Configuration](#configuration). |
 
 On success ACR prints the report path, the run log, and the trace file;
@@ -78,43 +78,32 @@ for example foo.rs:10-20,30. Otherwise, the colon is part of the filename.
 ## Configuration
 
 A run is configured by one TOML **profile**.
-ACR loads the first of:
-
-1. the file given by `--config` (it must exist);
-2. `acr.toml` in the current directory;
-3. [`tools/acr/acr.toml`](../acr.toml).
-
 ACR reads only the selected profile.
 Missing settings use built-in defaults,
 not values from another profile.
-Each value is taken from the first source that sets it:
-
-1. command-line options (`--backend`);
-2. `ACR_*` environment variables, such as `ACR_REVIEW_MODEL`, `ACR_POSTPROCESS_MODEL`, or `ACR_MAX_CONCURRENCY`;
-3. the profile;
-4. built-in defaults in [`config.py`](../src/config.py).
 
 Credentials are never stored in a profile.
-The `openai-agents` backend reads the API key from the environment variable named by `provider.api_key_env`;
-the `pi-agent` backend uses Pi's own login.
+The `openai-agents` backend reads the API key and endpoint from the environment variables
+named by `provider.api_key_env` and `provider.base_url_env` respectively;
+the `pi-agent` backend inherits the local Pi's own login or third-party config;
+the `claude-agent` backend inherits the local Claude CLI's authentication and connection config.
 
-The two reference profiles are [`acr.toml`](../acr.toml) (`openai-agents`)
-and [`acr.pi.toml`](../acr.pi.toml) (`pi-agent`).
-Their tables are:
+The reference profiles are [`acr.toml`](../acr.toml) (`openai-agents`),
+[`acr.pi.toml`](../acr.pi.toml) (`pi-agent`),
+and [`acr.claude.toml`](../acr.claude.toml) (`claude-agent`).
+The supported tables are:
 
 | Table | Key settings |
 |---|---|
 | `[agent]` | `backend`; `review_model` for persona reviews and `postprocess_model` for verification, consolidation, summary, and benchmark grading; `reasoning_effort` for persona reviews and `postprocess_reasoning_effort` for later stages; `per_persona_context`; `max_concurrency`; `timeout_seconds` per agent attempt (unset means no limit); `retries` of a whole agent run; `model_retries` of a single model request (`openai-agents` only). |
 | `[tools]` | One allowlist of tool names per agent role: the five personas, `verification`, `consolidation`, `summary`, and `grader`. |
-| `[provider]` | `openai-agents` only: `adapter` (`openai` or `any-llm`), `api_key_env`, `base_url_env`, and compatibility filters. |
-| `[pi]` | `pi-agent` only: `node_command`, `agent_dir`, timeouts, and trusted extensions. See [Pi backend](pi_backend.md). |
-| `[tracing]` | Whether to record local traces, whether to include prompt and response text, and the size limit per record. |
+| `[provider]` | `openai-agents` only: `adapter` (`openai` or `any-llm`), `api_key_env`, `base_url_env`. |
 | `[benchmark]` | `remote`: where to fetch benchmark commits that are missing locally. |
 
 **Model selection.**
-`review_model` and `postprocess_model` are independent settings;
-neither falls back to the other. Each defaults to `gpt-5.5` when unset.
-Use `ACR_REVIEW_MODEL` and `ACR_POSTPROCESS_MODEL` to override them separately.
+`review_model` and `postprocess_model` are independent settings.
+You can modify both in the profile.
+The Claude reference profile sets both to `"default"` to inherit local Claude CLI's model.
 
 **Persona contexts.**
 `per_persona_context = "yes"` runs one agent per active persona, in parallel;

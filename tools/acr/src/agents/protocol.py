@@ -39,7 +39,6 @@ class AgentRequest:
     output_schema: type[BaseModel] | None = None
     tools: tuple[ToolSpec, ...] = ()
     model: str = "gpt-5.5"
-    max_turns: int | None = None
     timeout_seconds: float | None = None
     metadata: Mapping[str, str] = field(default_factory=dict)
     persona: str | None = None
@@ -55,7 +54,6 @@ class AgentRequest:
             input_text=invocation.input.content,
             output_schema=invocation.output_type,
             model=invocation.model,
-            max_turns=invocation.run_limits.max_turns,
             timeout_seconds=invocation.run_limits.timeout_seconds,
             metadata=invocation.metadata,
             persona=invocation.persona,

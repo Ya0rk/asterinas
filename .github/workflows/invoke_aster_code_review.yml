@@ -1,22 +1,25 @@
-name: "Invoke the aster-code-review skill"
+name: "Invoke Aster Code Review"
 
-# A `/aster-code-review …` PR comment (or workflow_dispatch) drives
-# the `aster-code-review` skill on this PR to review the PR
+# A `/aster-code-review …` PR comment (or workflow_dispatch) runs
+# Aster Code Review (ACR, tools/acr) on this PR to review the PR
 # and post inline review comments:
 #
 #   /aster-code-review                      review the PR diff (alias for `diff`)
 #   /aster-code-review diff                 review the PR diff
 #   /aster-code-review files <p1> … <pN>    review those files
 #
-# Alternatively, such a PR comment can trigger the CI to run tests for the skill:
+# Alternatively, such a PR comment can trigger the CI to run ACR's benchmark:
 #
 #   /aster-code-review smoke     [--problems="<id1> … <idN>"]   run the smoke test
 #   /aster-code-review benchmark [--problems="<id1> … <idN>"]   run the benchmark
 #
 # where each `<idX>` is a benchmark problem's four-digit id (e.g. `0002`); omit
-# `--problems` to run the full set. A status comment is posted when the test finishes.
+# `--problems` to run the full set (smoke defaults to 0002 and 0006).
+# `smoke` reviews the problems without grading, checking only that reports are
+# produced; `benchmark` also grades them and reports recall.
+# A status comment is posted when the test finishes.
 #
-# All of it runs the PR's OWN skill + coding guidelines
+# All of it runs the PR's OWN ACR + coding guidelines
 # (not those of the main branch).
 #
 # TWO JOBS:
@@ -29,7 +32,7 @@ name: "Invoke the aster-code-review skill"
 #            `run` job only a validated plan.
 #   run    — the heavy lifting, inside the Asterinas dev image; only starts when
 #            triage says `proceed=true`. It checks out the PR head and runs the
-#            PR's own skill against it.
+#            PR's own ACR against it.
 #
 # SECURITY. The comment body is read via an env var, never interpolated into a
 # shell with ${{ }} (that would be an Actions injection). `triage` runs the trusted
@@ -42,18 +45,18 @@ name: "Invoke the aster-code-review skill"
 # polite "no permission" reply.
 #
 # FIXME(security): SECRET EXFILTRATION — KNOWN, NOT YET FIXED. The `run` job checks
-# out the PR head and executes the PR's OWN skill scripts and reads its OWN coding
+# out the PR head and executes the PR's OWN ACR code and reads its OWN coding
 # guidelines with OPENAI_API_KEY (and GH_TOKEN) in the environment, so a malicious
 # fork PR can edit those in-tree files to leak the secret (see the "Review the PR"
 # step). The gate to write-access members limits WHO can trigger it, but not what
 # the checked-out code does once triggered. The intended fix (deferred) is to run a
-# TRUSTED skill, not the PR's: check out the base repo's default branch, overlay its
-# skill onto the PR workspace (benchmark/overlay_skill.sh) and point
-# ACR_GUIDELINE_ROOT at its guidelines, repoint the review + post steps at that
-# trusted copy, and review the PR's code only as data. Self-tests (smoke/benchmark)
-# must run the PR's skill by design, so they keep this risk regardless.
+# TRUSTED ACR, not the PR's: check out the base repo's default branch, run its
+# tools/acr against the PR workspace with ACR_GUIDELINE_ROOT pointing at its
+# guidelines, repoint the post step at that trusted copy, and review the PR's code
+# only as data. Self-tests (smoke/benchmark) must run the PR's ACR by design, so
+# they keep this risk regardless.
 #
-# NOTE: auto-running smoke on skill/guideline changes is deferred — `pull_request`
+# NOTE: auto-running smoke on ACR/guideline changes is deferred — `pull_request`
 # gives fork PRs no secrets (no OPENAI_API_KEY). Use `/aster-code-review smoke`.
 
 on:
@@ -71,7 +74,7 @@ on:
         type: string
 
 env:
-  SKILL_DIR: .agents/skills/aster-code-review
+  ACR_DIR: tools/acr
 
 defaults:
   run:
@@ -162,7 +165,7 @@ jobs:
           fi
 
           # 3) Parse with the TRUSTED (default-branch) parser. On error, reply usage.
-          if ! PLAN=$(printf '%s' "$SRC" | "$SKILL_DIR/scripts/parse_pr_command.sh" 2>parse.err); then
+          if ! PLAN=$(printf '%s' "$SRC" | "$ACR_DIR/src/scripts/parse_pr_command.sh" 2>parse.err); then
             {
               echo "🛑 I couldn't understand that \`/aster-code-review\` command:"
               echo
@@ -175,7 +178,7 @@ jobs:
               echo '/aster-code-review                     review the PR diff'
               echo '/aster-code-review diff                review the PR diff'
               echo '/aster-code-review files <p1> ... <pN> review those files'
-              echo '/aster-code-review smoke     [--problems="0002 0006"]   run the skill smoke test'
+              echo '/aster-code-review smoke     [--problems="0002 0006"]   run the ACR smoke test'
               echo '/aster-code-review benchmark [--problems="0002 0006"]   run the recall benchmark'
               echo '```'
             } > msg.md
@@ -208,7 +211,7 @@ jobs:
             desc="run the $target self-test"; [ -n "$problems" ] && desc="$desc on problems $problems"
           fi
           {
-            echo "✅ On it! I'll $desc, running the PR's own \`aster-code-review\` skill and coding guidelines."
+            echo "✅ On it! I'll $desc, running the PR's own Aster Code Review and coding guidelines."
             echo
             echo "Track progress here: $RUN_URL"
             echo
@@ -231,9 +234,8 @@ jobs:
       group: aster-code-review-run-pr-${{ github.event.issue.number || inputs.pr_number }}
       cancel-in-progress: true
     runs-on: ubuntu-latest
-    # Run inside the Asterinas dev image, which ships Codex (and Claude) preinstalled
-    # on PATH (/root/.local/bin) plus python3 + yq — everything the skill and its
-    # benchmark need.
+    # Run inside the Asterinas dev image, which ships ACR's Python dependencies
+    # — everything ACR and its benchmark need.
     container:
       image: asterinas/dev:0.18.1-20260901
     timeout-minutes: 60          # headroom for a full `benchmark`; review/smoke finish far sooner
@@ -258,16 +260,16 @@ jobs:
           git remote add base-repo "${{ github.server_url }}/${{ github.repository }}.git"
           git fetch base-repo "${{ needs.triage.outputs.base_ref }}"
 
-      # --- review modes: run the skill, post inline comments ------------------
-      # FIXME(security): this step runs the PR's OWN aster_code_review.sh (and the
-      # scripts + guidelines it pulls in) with OPENAI_API_KEY in the environment, so
+      # --- review modes: run ACR, post inline comments ------------------------
+      # FIXME(security): this step runs the PR's OWN tools/acr/run.sh (and the
+      # ACR code + guidelines it pulls in) with OPENAI_API_KEY in the environment, so
       # a malicious fork PR can exfiltrate the secret. Deferred; see the SECURITY /
-      # SECRET EXFILTRATION note in the header for the intended trusted-skill fix.
+      # SECRET EXFILTRATION note in the header for the intended trusted-ACR fix.
       - name: Review the PR
         if: needs.triage.outputs.kind == 'review'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          ACR_AGENT_PROFILE: codex_workflow
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           MODE: ${{ needs.triage.outputs.mode }}
           PATHS: ${{ needs.triage.outputs.paths }}
           BASE_SHA: ${{ needs.triage.outputs.base_sha }}
@@ -281,9 +283,9 @@ jobs:
               case "$p" in *..*) echo "path traversal: $p" >&2; exit 1 ;; esac
               git ls-files --error-unmatch "$p" >/dev/null 2>&1 || { echo "not a tracked file: $p" >&2; exit 1; }
             done
-            "$SKILL_DIR/aster_code_review.sh" files "$@" review.md --per-persona-context=no
+            "$ACR_DIR/run.sh" files "$@" review.md --per-persona-context=yes
           else
-            "$SKILL_DIR/aster_code_review.sh" diff "$BASE_SHA" review.md --per-persona-context=no
+            "$ACR_DIR/run.sh" diff "$BASE_SHA" review.md --per-persona-context=yes
           fi
 
       - name: Post review comments
@@ -297,16 +299,17 @@ jobs:
           if [ ! -s review.md ]; then
             echo "No review produced; nothing to post."; exit 0
           fi
-          "$SKILL_DIR/scripts/post_reviews_to_github.sh" \
+          "$ACR_DIR/src/scripts/post_reviews_to_github.sh" \
             --repo "$REPO" --pr "$PR_NUMBER" --head-sha "$HEAD_SHA" \
             --finalize --event comment review.md
 
-      # --- test modes: run make, then post a human-friendly status comment ----
-      - name: Run skill self-test
+      # --- test modes: run the benchmark, then post a status comment -----------
+      - name: Run ACR self-test
         if: needs.triage.outputs.kind == 'test'
         id: selftest
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           TARGET: ${{ needs.triage.outputs.target }}
           PROBLEMS: ${{ needs.triage.outputs.problems }}
         run: |
@@ -315,16 +318,17 @@ jobs:
           if [ -n "$PROBLEMS" ] && ! printf '%s' "$PROBLEMS" | grep -qE '^[0-9]{1,4}( [0-9]{1,4})*$'; then
             echo "invalid PROBLEMS: $PROBLEMS" >&2; exit 1
           fi
-          cd "$SKILL_DIR"
-          # Don't let a non-zero make abort the step (default shell is `bash -eo pipefail`);
+          # Smoke defaults to one diff problem and one files problem.
+          [ "$TARGET" = smoke ] && [ -z "$PROBLEMS" ] && PROBLEMS="0002 0006"
+          args=()
+          for p in $PROBLEMS; do args+=(--problem "$p"); done
+          # Smoke only checks that reviews are produced; benchmark also grades them.
+          [ "$TARGET" = benchmark ] && args+=(--grade)
+          # Don't let a non-zero exit abort the step (default shell is `bash -eo pipefail`);
           # capture the code so the report step always runs and the verdict is posted.
           set +e
-          if [ "$TARGET" = smoke ]; then
-            make smoke ACR_AGENT_PROFILE=codex_workflow PROBLEMS="$PROBLEMS" 2>&1 | tee "$GITHUB_WORKSPACE/run.log"
-          else
-            # informational: report recall, don't fail the check on <100% (codex_workflow != reference config)
-            make benchmark ACR_AGENT_PROFILE=codex_workflow MIN_RECALL=1 PROBLEMS="$PROBLEMS" 2>&1 | tee "$GITHUB_WORKSPACE/run.log"
-          fi
+          "$ACR_DIR/benchmark-data/run.sh" "${args[@]}" --work "$RUNNER_TEMP/acr-benchmark" \
+            2>&1 | tee "$GITHUB_WORKSPACE/run.log"
           rc=${PIPESTATUS[0]}
           set -e
           echo "rc=$rc" >> "$GITHUB_OUTPUT"
@@ -340,14 +344,19 @@ jobs:
           RC: ${{ steps.selftest.outputs.rc }}
         run: |
           log="$GITHUB_WORKSPACE/run.log"
-          summary="$(grep -E '^(smoke:|recall:)' "$log" 2>/dev/null | tail -1 || true)"
+          if [ "$TARGET" = smoke ]; then
+            reports="$(grep -c '^\[acr\] Review report:' "$log" 2>/dev/null || true)"
+            summary="smoke: ${reports:-0} review report(s) produced"
+          else
+            summary="$(grep -E '^\[acr\] (Recall |Overall recall:)' "$log" 2>/dev/null || true)"
+          fi
           [ -n "$summary" ] || summary="(no summary line — see the run log below)"
           if [ "${RC:-1}" = 0 ]; then icon='✅'; verdict='passed'; else icon='❌'; verdict='failed'; fi
           # Echo the command back in the CLI style the user typed (--problems=…),
-          # not the internal make knob (PROBLEMS=…).
+          # not the internal runner flag (--problem …).
           probs=""; [ -n "$PROBLEMS" ] && probs=" --problems=\"$PROBLEMS\""
           {
-            echo "$icon \`aster-code-review $TARGET$probs\`  $verdict — ran the PR's skill + coding guidelines."
+            echo "$icon \`aster-code-review $TARGET$probs\`  $verdict — ran the PR's ACR + coding guidelines."
             echo; echo '```'; echo "$summary"; echo '```'
             echo; echo '<details><summary>run log (tail)</summary>'; echo
             echo '```'; tail -n 40 "$log" 2>/dev/null; echo '```'

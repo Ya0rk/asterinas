@@ -76,11 +76,8 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(config.backend, "fake")
             self.assertEqual(config.wire_api, "responses")
             self.assertEqual(config.provider.adapter, "any-llm")
-            self.assertIsNone(config.max_turns)
             self.assertIsNone(config.timeout_seconds)
             self.assertGreaterEqual(config.model_retries, 0)
-            self.assertEqual(config.provider.response_input_exclude_fields, ("quality",))
-            self.assertEqual(config.provider.retryable_http_error_types, ("upstream_error",))
             self.assertEqual(
                 config.benchmark_remote,
                 "https://github.com/asterinas/asterinas",
@@ -100,6 +97,31 @@ class CoreTests(unittest.TestCase):
         with self.assertRaises(ConfigError):
             RunConfig(wire_api="messages").validate()
 
+    def test_provider_values_come_only_from_named_environment_variables(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.toml"
+            path.write_text(
+                '[provider]\napi_key_env="ACR_TEST_API_KEY"\nbase_url_env="ACR_TEST_BASE_URL"\n'
+                'base_url="https://unused.example/v1"\nbase_url_value="https://legacy.example/v1"\n',
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                config = load_config(path)
+                self.assertIsNone(config.provider.api_key)
+                self.assertIsNone(config.provider.base_url)
+                with patch.dict(os.environ, {
+                    "ACR_TEST_API_KEY": "test-only",
+                    "ACR_TEST_BASE_URL": " https://relay.example/v1 ",
+                    "ALTERNATE_KEY": "alternate-test-only",
+                    "ALTERNATE_URL": "https://alternate.example/v1",
+                }):
+                    self.assertEqual(config.provider.api_key, "test-only")
+                    self.assertEqual(config.provider.base_url, "https://relay.example/v1")
+                    overridden = load_config(path, overrides={
+                        "api_key_env": "ALTERNATE_KEY", "base_url_env": "ALTERNATE_URL",
+                    })
+                    self.assertEqual(overridden.provider.api_key, "alternate-test-only")
+                    self.assertEqual(overridden.provider.base_url, "https://alternate.example/v1")
+
     def test_config_accepts_supported_provider_adapters(self):
         RunConfig(provider=ProviderConfig(adapter="openai")).validate()
         RunConfig(
@@ -112,12 +134,6 @@ class CoreTests(unittest.TestCase):
     def test_config_rejects_unknown_postprocess_reasoning_effort(self):
         with self.assertRaises(ConfigError):
             RunConfig(postprocess_reasoning_effort="minimal").validate()
-
-    def test_max_turns_is_optional_but_positive_when_set(self):
-        RunConfig(max_turns=None).validate()
-        RunConfig(max_turns=20).validate()
-        with self.assertRaises(ConfigError):
-            RunConfig(max_turns=0).validate()
 
     def test_agent_timeout_is_optional_but_positive_when_set(self):
         self.assertIsNone(RunConfig().validate().timeout_seconds)
@@ -165,20 +181,16 @@ class CoreTests(unittest.TestCase):
         error.body = {"error": {"message": "upstream_error only in text"}}
         self.assertIsNone(_http_error_type(error))
 
-    def test_model_retry_policy_only_retries_configured_http_400_type(self):
+    def test_model_retry_policy_recognizes_transient_upstream_errors(self):
         from agents import ModelRetryNormalizedError, RetryPolicyContext
 
-        backend = None
         with patch.dict(os.environ, {"ACR_TEST_API_KEY": "test-only"}):
             backend = OpenAIAgentsBackend(RunConfig(
-                provider=ProviderConfig(
-                    api_key_env="ACR_TEST_API_KEY",
-                    retryable_http_error_types=("upstream_error",),
-                ),
+                provider=ProviderConfig(api_key_env="ACR_TEST_API_KEY"),
             ))
         policy = backend._build_retry_settings().policy
 
-        async def decision_for(error_type):
+        async def decision_for(status, error_type):
             error = RuntimeError("request failed")
             error.body = {"error": {"type": error_type}}
             context = RetryPolicyContext(
@@ -186,41 +198,41 @@ class CoreTests(unittest.TestCase):
                 attempt=1,
                 max_retries=3,
                 stream=False,
-                normalized=ModelRetryNormalizedError(status_code=400),
+                normalized=ModelRetryNormalizedError(status_code=status),
             )
             value = policy(context)
             return await value if inspect.isawaitable(value) else value
 
-        self.assertTrue(asyncio.run(decision_for("upstream_error")).retry)
-        self.assertFalse(asyncio.run(decision_for("invalid_request_error")).retry)
+        for status, error_type, retry in (
+            (400, "upstream_error", True),
+            (400, "invalid_request_error", False),
+            (400, "authentication_error", False),
+            (401, "upstream_error", False),
+            (429, "rate_limit_error", True),
+            (502, "upstream_error", True),
+        ):
+            with self.subTest(status=status, error_type=error_type):
+                self.assertEqual(asyncio.run(decision_for(status, error_type)).retry, retry)
 
     def test_sdk_model_adapter_selection(self):
-        with patch.dict(os.environ, {"ACR_TEST_API_KEY": "test-only"}):
+        with patch.dict(os.environ, {
+            "ACR_TEST_API_KEY": "test-only", "ACR_TEST_BASE_URL": "https://relay.example/v1",
+        }):
             any_llm_config = RunConfig(
                 wire_api="chat_completions",
                 provider=ProviderConfig(
                     adapter="any-llm",
                     api_key_env="ACR_TEST_API_KEY",
-                    base_url_value="https://relay.example/v1",
-                    response_input_exclude_fields=("quality",),
-                    retryable_http_error_types=("upstream_error",),
+                    base_url_env="ACR_TEST_BASE_URL",
                 ),
             )
             any_llm_backend = OpenAIAgentsBackend(any_llm_config)
             self.assertEqual(any_llm_backend._reasoning_effort_for("persona"), "high")
             self.assertEqual(any_llm_backend._reasoning_effort_for("verification"), "low")
             any_llm_model, any_llm_resource = any_llm_backend._build_model("openai/test-model")
-            self.assertEqual(type(any_llm_model).__name__, "ConfiguredAnyLLMModel")
+            self.assertEqual(type(any_llm_model).__name__, "NormalizedAnyLLMModel")
             self.assertEqual(any_llm_model.api, "chat_completions")
             self.assertEqual(any_llm_model.base_url, "https://relay.example/v1")
-            replay = any_llm_model._sanitize_any_llm_responses_input([
-                {"type": "reasoning", "quality": "high", "summary": []},
-                {"type": "function_call", "quality": "high", "name": "source_read"},
-            ])
-            self.assertEqual(replay, [
-                {"type": "reasoning", "summary": []},
-                {"type": "function_call", "name": "source_read"},
-            ])
             retry = any_llm_backend._build_retry_settings()
             self.assertEqual(retry.max_retries, 3)
             asyncio.run(any_llm_resource.close())
@@ -229,12 +241,60 @@ class CoreTests(unittest.TestCase):
                 provider=ProviderConfig(
                     adapter="openai",
                     api_key_env="ACR_TEST_API_KEY",
+                    base_url_env="ACR_TEST_BASE_URL",
                 ),
             )
             openai_backend = OpenAIAgentsBackend(openai_config)
             openai_model, openai_resource = openai_backend._build_model("test-model")
             self.assertEqual(type(openai_model).__name__, "OpenAIResponsesModel")
+            self.assertEqual(str(openai_resource.base_url), "https://relay.example/v1/")
             asyncio.run(openai_resource.close())
+
+    def test_openai_agent_can_exceed_the_sdk_default_turn_limit(self):
+        from agents import function_tool
+        from agents.items import ModelResponse
+        from agents.models.interface import Model
+        from agents.run import DEFAULT_MAX_TURNS
+        from agents.usage import Usage
+        from openai.types.responses import ResponseFunctionToolCall, ResponseOutputMessage, ResponseOutputText
+
+        class ReviewModel(Model):
+            calls = 0
+
+            async def get_response(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls <= DEFAULT_MAX_TURNS:
+                    output = ResponseFunctionToolCall(
+                        type="function_call", name="continue_review", arguments="{}",
+                        call_id=f"review-{self.calls}",
+                    )
+                else:
+                    output = ResponseOutputMessage(
+                        id="review-result", type="message", role="assistant", status="completed",
+                        content=[ResponseOutputText(type="output_text", text='{"comments": []}', annotations=[])],
+                    )
+                return ModelResponse(output=[output], usage=Usage(requests=1), response_id=None)
+
+            def stream_response(self, *_args, **_kwargs):
+                raise AssertionError("streaming is not used in this test")
+
+        @function_tool
+        def continue_review() -> str:
+            return "Continue investigating."
+
+        with patch.dict(os.environ, {"ACR_TEST_API_KEY": "test-only"}):
+            backend = OpenAIAgentsBackend(RunConfig(
+                provider=ProviderConfig(api_key_env="ACR_TEST_API_KEY"),
+                tracing_enabled=False,
+            ))
+        model = ReviewModel()
+        with (
+            patch.object(backend, "_build_model", return_value=(model, model)),
+            patch.object(backend, "_hosted_tools", return_value=[continue_review]),
+        ):
+            response = asyncio.run(backend.run(AgentRequest("persona", "Review the code.", "code", CommentsEnvelope)))
+        self.assertEqual(response.value.model_dump(), {"comments": []})
+        self.assertEqual(model.calls, DEFAULT_MAX_TURNS + 1)
 
     def test_postprocess_prompts_and_tool_boundaries(self):
         config_path = Path(__file__).resolve().parents[1] / "acr.toml"

@@ -219,10 +219,7 @@ async function run(frame) {
 		if (activeTools.length !== names.size || activeTools.some((name) => !names.has(name))) throw new Error("Pi session tool allowlist mismatch");
 		controller.signal.throwIfAborted();
 		unsubscribe = session.subscribe((event) => {
-			if (event.type === "turn_start") {
-				turns++;
-				if (request.max_turns != null && turns > request.max_turns) cancelRun("maximum turns exceeded");
-			}
+			if (event.type === "turn_start") turns++;
 			if (event.type === "tool_execution_start") toolCalls++;
 			if (event.type === "message_end" && event.message.role === "assistant") {
 				const message = event.message;

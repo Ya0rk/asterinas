@@ -118,6 +118,11 @@ class PortabilityTests(unittest.TestCase):
             target = root / "target"
             target.mkdir()
             (target / "README.md").write_text("# Target\n", encoding="utf-8")
+            (target / "AGENTS.md").write_text(
+                "## Repository Layout\nTARGET_STALE_REPOSITORY_CONTEXT\n"
+                "## Architecture Notes\nTARGET_STALE_REPOSITORY_CONTEXT\n",
+                encoding="utf-8",
+            )
             shutil.copytree(
                 source_repo / guideline_rel,
                 target / guideline_rel,
@@ -157,6 +162,9 @@ class PortabilityTests(unittest.TestCase):
                 )
             ).read_text(encoding="utf-8")
             self.assertNotIn(stale_sentinel, instructions)
+            self.assertIn("## Repository Layout", instructions)
+            self.assertIn("## Architecture Notes", instructions)
+            self.assertNotIn("TARGET_STALE_REPOSITORY_CONTEXT", instructions)
 
     def test_benchmark_cli_rejects_alternative_problem_file(self):
         acr_root = Path(__file__).resolve().parents[1]

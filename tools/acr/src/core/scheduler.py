@@ -50,7 +50,7 @@ class PassScheduler:
                 request = AgentRequest.from_invocation(value) if isinstance(value, AgentInvocation) else AgentRequest(
                     role="persona", instructions=f"Review only the {persona} persona scope and return the pass-contract JSON array.",
                     input_text=value, output_schema=CommentsEnvelope, model=self.config.review_model,
-                    max_turns=self.config.max_turns, timeout_seconds=self.config.timeout_seconds, persona=persona,
+                    timeout_seconds=self.config.timeout_seconds, persona=persona,
                 )
                 response = await self._call(request, stage="persona", persona=persona)
                 if self.logger is not None:
@@ -77,7 +77,7 @@ class PassScheduler:
             stable_blocks = [str(prompts[persona]).split(marker, 1)[0].rstrip() for persona in personas]
             review_input = str(first).split(marker, 1)[1] if marker in str(first) else ""
             combined = "\n\n".join(stable_blocks) + "\n" + marker + review_input
-            request = AgentRequest(role="persona", instructions="Review every included persona scope and set each comment's persona field correctly.", input_text=combined, output_schema=CommentsEnvelope, model=self.config.review_model, max_turns=self.config.max_turns, timeout_seconds=self.config.timeout_seconds)
+            request = AgentRequest(role="persona", instructions="Review every included persona scope and set each comment's persona field correctly.", input_text=combined, output_schema=CommentsEnvelope, model=self.config.review_model, timeout_seconds=self.config.timeout_seconds)
         response = await self._call(request, stage="persona", persona=None)
         if self.logger is not None:
             self.logger.agent_artifact(stage="persona", agent_run_id=response.agent_run_id, value=response.raw_output or response.value)

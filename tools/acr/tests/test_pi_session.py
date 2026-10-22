@@ -85,9 +85,9 @@ class _Handler(BaseHTTPRequestHandler):
             pass
 
 
-def _call(name="structured_output", arguments=None):
+def _call(name="structured_output", arguments=None, *, call_id="fixture-call"):
     return {"tool_calls": [{
-        "index": 0, "id": "fixture-call", "type": "function",
+        "index": 0, "id": call_id, "type": "function",
         "function": {"name": name, "arguments": json.dumps(arguments if arguments is not None else {"ok": True})},
     }]}
 
@@ -122,11 +122,11 @@ class PiSessionTests(unittest.IsolatedAsyncioTestCase):
         self.backend = PiAgentBackend(self.config, repo_root=self.root, run_root=self.root, broker=ToolBroker(self.source))
         self.addAsyncCleanup(self.backend.aclose)
 
-    def request(self, *, tools=(), max_turns=5, timeout=10, output_type=_Output):
+    def request(self, *, tools=(), timeout=10, output_type=_Output):
         return AgentRequest.from_invocation(AgentInvocation(
             AgentInstructions(("summary",), "ACR_TEST_INSTRUCTIONS", "test-v1"),
             AgentInput.from_text("ACR_TEST_INPUT"), output_type,
-            ToolPolicy(allow=tools), RunLimits(max_turns=max_turns, timeout_seconds=timeout),
+            ToolPolicy(allow=tools), RunLimits(timeout_seconds=timeout),
             "summary", None, "acr-test/mock",
         ))
 
@@ -141,6 +141,8 @@ class PiSessionTests(unittest.IsolatedAsyncioTestCase):
         events = []
         response = await self.backend.run(self.request(), event_sink=events.append)
         self.assertEqual(response.value, {"ok": True})
+        reply = next(event for event in events if event.event_type == "agent.reply")
+        self.assertEqual(reply.data["output"], {"ok": True})
         self.assertFalse((self.agent_dir / "npm").exists())
         self.assertFalse(list((self.root / "pi-sessions").rglob("*.jsonl")))
         sent = self.endpoint.requests[0]
@@ -222,10 +224,15 @@ class PiSessionTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(PiAgentError):
             await self.backend.run(self.request())
 
-    async def test_turn_limit_stops_model_loop(self):
-        self.endpoint.replies = [_call("source_read", {"path": "fixture.rs"}), _call()]
-        with self.assertRaisesRegex(PiAgentError, "maximum turns exceeded"):
-            await self.backend.run(self.request(tools=("source.read",), max_turns=1))
+    async def test_long_tool_loop_completes(self):
+        self.endpoint.replies = [
+            _call("source_read", {"path": "fixture.rs"}, call_id=f"read-{index}")
+            for index in range(50)
+        ] + [_call()]
+        response = await self.backend.run(self.request(tools=("source.read",)))
+        self.assertEqual(response.value, {"ok": True})
+        self.assertEqual(len(self.source.calls), 50)
+        self.assertEqual(response.usage["turns"], 51)
 
     async def test_timeout_aborts_session(self):
         self.endpoint.replies = ["wait"]

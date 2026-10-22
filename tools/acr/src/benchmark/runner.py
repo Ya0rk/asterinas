@@ -87,7 +87,7 @@ def load_problems(
     try:
         import yaml
     except ImportError as exc:
-        raise BenchmarkError("PyYAML is required to load benchmark problems; install acr[benchmark]") from exc
+        raise BenchmarkError("PyYAML is required to load benchmark problems; install tools/acr") from exc
     try:
         values = yaml.safe_load(path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
@@ -394,12 +394,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the ACR benchmark with a detached worktree")
     parser.add_argument("--problem", action="append", dest="selectors", default=[])
     parser.add_argument("--work", type=Path, default=None)
-    parser.add_argument("--backend", choices=("openai-agents", "pi-agent", "fake"), default=None)
-    parser.add_argument("--config", type=Path, default=None, help="ACR TOML configuration; credentials are read from its api_key_env")
+    parser.add_argument("--backend", choices=("openai-agents", "pi-agent", "claude-agent", "fake"), default=None)
+    parser.add_argument("--config", type=Path, default=None, help="ACR TOML configuration; authentication is managed by the selected backend")
     parser.add_argument("--grade", action="store_true", help="run the isolated structured grader after each review")
     parser.add_argument("--timeout", type=float, default=None, help="per-agent timeout in seconds")
     parser.add_argument("--retries", type=int, default=None, help="agent retries")
-    parser.add_argument("--max-turns", type=int, default=None, help="maximum SDK turns")
     parser.add_argument("--per-persona-context", choices=("yes", "no", "auto"), default=None)
     args = parser.parse_args(argv)
     repo_root = Path.cwd()
@@ -451,8 +450,6 @@ def main(argv: list[str] | None = None) -> int:
             config = replace(config, timeout_seconds=args.timeout)
         if args.retries is not None:
             config = replace(config, retries=args.retries)
-        if args.max_turns is not None:
-            config = replace(config, max_turns=args.max_turns)
         if args.per_persona_context is not None:
             config = replace(config, per_persona_context=args.per_persona_context)
         config.validate()

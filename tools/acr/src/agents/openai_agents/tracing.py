@@ -162,7 +162,7 @@ def sdk_trace_context(
     exporter from receiving relay prompts or tool content.
     """
 
-    if not config.tracing_enabled:
+    if config.backend != "openai-agents" or not config.tracing_enabled:
         yield
         return
     try:

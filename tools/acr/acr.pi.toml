@@ -11,19 +11,8 @@ reasoning_effort = "high"
 postprocess_reasoning_effort = "medium"
 per_persona_context = "auto"
 max_concurrency = 5
-timeout_seconds = 1200
 retries = 1
-tools_enabled = true
-
-[pi]
-node_command = "node"
-agent_dir = "~/.pi/agent"
-bridge_startup_timeout_seconds = 30
-shutdown_grace_seconds = 5
-# Save Pi conversation files under the run's pi-sessions/ directory.
-# Set to false to keep Pi sessions in memory; ACR logs are still saved.
-keep_native_sessions = true
-trusted_extensions = []
+# timeout_seconds = 1200
 
 [tools]
 maintainability = ["source.read", "source.search", "git.show", "git.log", "git.blame", "guideline.show"]
@@ -35,9 +24,3 @@ verification = ["source.read", "source.search", "source.list", "git.show", "git.
 consolidation = []
 summary = []
 grader = []
-
-[tracing]
-enabled = true
-# Include final model response text in ACR logs.
-include_sensitive_data = true
-max_content_bytes = 65536

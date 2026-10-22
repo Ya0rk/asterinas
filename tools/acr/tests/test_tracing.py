@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from acr.agents.openai_agents import sdk_trace_context
 from acr.config import RunConfig
@@ -12,6 +13,15 @@ from acr.core.events import EventLogger
 
 
 class TracingTests(unittest.TestCase):
+    def test_other_backends_do_not_change_openai_tracing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            logger = EventLogger(Path(directory), "trace-test")
+            for backend in ("claude-agent", "pi-agent", "fake"):
+                with self.subTest(backend=backend), patch("agents.set_trace_processors") as processors:
+                    with sdk_trace_context(logger, RunConfig(backend=backend)):
+                        pass
+                    processors.assert_not_called()
+
     def test_response_span_includes_full_input_and_response(self):
         from agents import response_span
 
@@ -79,19 +89,12 @@ class TracingTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            old = os.environ.get("TOKENSKINGDOM_API_KEY")
-            os.environ["TOKENSKINGDOM_API_KEY"] = "provider-secret-value"
-            try:
+            with patch.dict(os.environ, {"ACR_TEST_API_KEY": "provider-secret-value"}):
                 logger = EventLogger(root, "trace-test")
                 config = RunConfig(backend="openai-agents")
                 with sdk_trace_context(logger, config):
                     with custom_span("secret", {"payload": "provider-secret-value"}):
                         pass
-            finally:
-                if old is None:
-                    os.environ.pop("TOKENSKINGDOM_API_KEY", None)
-                else:
-                    os.environ["TOKENSKINGDOM_API_KEY"] = old
             text = (root / "sdk-trace.jsonl").read_text()
             self.assertNotIn("provider-secret-value", text)
             self.assertIn("[REDACTED]", text)

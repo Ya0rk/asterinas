@@ -10,11 +10,11 @@ ACR reviews code against Asterinas's persona-keyed Coding Guidelines and writes 
 It works in two modes, both anchored at the current checkout (`HEAD`):
 `diff <base>` reviews the commits the branch added over `<base>`,
 and `files` reviews the current contents of named files.
-Up to five reviewer **personas**
+There are five reviewer **personas** used by ACR
 — Maintainability, Development, Security, Hardware, and Documentation —
 each own one part of the guidelines and review the code independently.
-A Python orchestrator drives them, then fact-checks, consolidates, and summarizes their findings.
-Models are reached through a pluggable backend: the OpenAI Agents SDK, Pi, or a model-free fake.
+A Python orchestrator activates and drives them, then fact-checks, consolidates, and summarizes their findings.
+Models are reached through a pluggable backend: OpenAI Agents SDK, Pi, Claude Agent SDK, or a model-free fake.
 
 ## How to read this spec
 
@@ -24,14 +24,15 @@ Models are reached through a pluggable backend: the OpenAI Agents SDK, Pi, or a 
 | [Coding guidelines](coding_guidelines.md) | Why the guidelines are organized by persona, and how a reviewer loads only the rules it needs. |
 | [Interface and output](interface.md) | The command line, the two review modes, configuration, and the report format. |
 | [Execution model](execution_model.md) | The pipeline stages, persona activation, read-only tools, and what each run records. |
-| [Pi backend](pi_backend.md) | How the `pi-agent` backend isolates each agent and keeps it read-only. |
+| [OpenAI Agents backend](openai_agents_backend.md) | How `openai-agents` backend uses model APIs, SDK instructions, and direct function tools. |
+| [Pi backend](pi_backend.md) | How `pi-agent` backend isolates each agent and keeps it read-only. |
+| [Claude backend](claude_backend.md) | How the `claude-agent` backend inherits local Claude CLI configuration and uses ACR's tools. |
 | [Benchmark and evaluation](benchmark.md) | How recall is measured, how problems are sourced without leaking answers, and how to run it. |
 | [Related work](related_work.md) | How ACR differs from prior review systems. |
 
-Read top to bottom:
-the first two documents give the *why*,
-the next three the *what* and *how*,
-and the benchmark gives *how we know it works*.
+Read the motivation and guidelines for the *why*,
+the interface, execution model, and relevant backend for the *what* and *how*,
+and the benchmark for *how we know it works*.
 
 ## Design principles
 

@@ -57,7 +57,6 @@ class ToolPolicy:
 
 @dataclass(frozen=True)
 class RunLimits:
-    max_turns: int | None = None
     timeout_seconds: float | None = None
     retries: int = 0
 

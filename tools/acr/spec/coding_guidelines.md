@@ -74,7 +74,7 @@ ACR therefore loads them in two steps:
 `guideline.show` fails if the digest is stale or a short-name is not in the catalog.
 A finding may cite a short-name only after the agent has fetched it.
 This keeps prompts small without losing traceability.
-Both backends use the same tool implementation
+All backends use the same tool implementation
 ([`core/disclosure.py`](../src/core/disclosure.py) and [`scripts/print_guideline.py`](../src/scripts/print_guideline.py)).
 
 Setting `ACR_GUIDELINE_DISCLOSURE=full` instead inlines every rule into the prompt.

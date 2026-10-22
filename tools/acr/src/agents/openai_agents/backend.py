@@ -8,19 +8,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import time
 import uuid
-from collections.abc import Mapping
 from typing import Any
 
 from ...config import RunConfig
 from ...tools.protocol import ToolBroker
 from ..protocol import AgentBackend, AgentEvent, AgentRequest, AgentResponse, CancellationToken
-
-
-class OpenAIAgentError(RuntimeError):
-    """An SDK/provider failure that should fail the current stage."""
+from .protocol import OpenAIAgentError, _dump, _http_error_type, _reasoning_summary, _usage
+from .tools import function_tools
 
 
 class OpenAIAgentsBackend:
@@ -100,7 +96,7 @@ class OpenAIAgentsBackend:
                     ),
                 )
             scoped = self.broker.policy(allowed, event_hook=tool_sink)
-            tools.extend(scoped.function_tools())
+            tools.extend(function_tools(scoped))
         output_type = request.output_schema
         # OpenAI strict schemas cannot represent arbitrary string-key maps.
         # Consolidation still receives a typed Pydantic result and is parsed
@@ -123,17 +119,13 @@ class OpenAIAgentsBackend:
             "acr_model": request.model or self.config.model_for(request.role),
             "acr_input_sha256": _sha(request.review_input.content),
             "acr_instructions_sha256": _sha(request.stable_instructions.text),
+            "input": request.review_input.content,
+            "instructions": request.stable_instructions.text,
         }
-        if self.config.trace_include_sensitive_data:
-            trace_data.update(
-                {
-                    "input": request.review_input.content,
-                    "instructions": request.stable_instructions.text,
-                }
-            )
         sdk_run_config = SDKRunConfig(
             tracing_disabled=not (self.config.tracing_enabled and local_trace_active()),
-            trace_include_sensitive_data=self.config.trace_include_sensitive_data,
+            # EventLogger redacts recognized credentials in these local traces.
+            trace_include_sensitive_data=True,
             workflow_name=f"ACR {request.role}",
             trace_metadata={
                 "acr_stage": request.role,
@@ -152,7 +144,8 @@ class OpenAIAgentsBackend:
                 return await Runner.run(
                     agent,
                     request.review_input.content,
-                    max_turns=request.max_turns,
+                    # Omitting this argument enables the SDK's default turn cap.
+                    max_turns=None,
                     run_config=sdk_run_config,
                 )
         finally:
@@ -194,21 +187,14 @@ class OpenAIAgentsBackend:
                     "the any-llm adapter is not installed; install ACR dependencies "
                     "with openai-agents[any-llm]"
                 ) from exc
-            exclude_fields = frozenset(self.config.provider.response_input_exclude_fields)
+            from .responses import normalize_responses_input
 
-            class ConfiguredAnyLLMModel(AnyLLMModel):
+            class NormalizedAnyLLMModel(AnyLLMModel):
                 def _sanitize_any_llm_responses_input(self, list_input: list[Any]) -> list[Any]:
                     cleaned = super()._sanitize_any_llm_responses_input(list_input)
-                    if not exclude_fields:
-                        return cleaned
-                    return [
-                        {key: value for key, value in item.items() if key not in exclude_fields}
-                        if isinstance(item, dict)
-                        else item
-                        for item in cleaned
-                    ]
+                    return normalize_responses_input(cleaned)
 
-            model = ConfiguredAnyLLMModel(
+            model = NormalizedAnyLLMModel(
                 model=model_name,
                 base_url=self.config.provider.base_url,
                 api_key=self.config.provider.api_key,
@@ -223,22 +209,18 @@ class OpenAIAgentsBackend:
     def _build_retry_settings(self) -> Any:
         from agents import ModelRetrySettings, RetryDecision, retry_policies
 
-        retryable_types = frozenset(self.config.provider.retryable_http_error_types)
-
-        def configured_http_error(context: Any) -> Any:
-            if context.normalized.status_code != 400:
-                return False
-            error_type = _http_error_type(context.error)
-            if error_type not in retryable_types:
-                return False
-            return RetryDecision(retry=True, reason=f"configured HTTP 400 error type: {error_type}")
+        def upstream_http_error(context: Any) -> Any:
+            # Some relays report transient upstream failures as bad requests.
+            if context.normalized.status_code == 400 and _http_error_type(context.error) == "upstream_error":
+                return RetryDecision(retry=True, reason="upstream error reported as HTTP 400")
+            return False
 
         policy = retry_policies.any(
             retry_policies.provider_suggested(),
             retry_policies.network_error(),
             retry_policies.retry_after(),
             retry_policies.http_status((408, 409, 429, 500, 502, 503, 504)),
-            configured_http_error,
+            upstream_http_error,
         )
         return ModelRetrySettings(
             max_retries=self.config.model_retries,
@@ -264,55 +246,3 @@ class OpenAIAgentsBackend:
 
 def _sha(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _http_error_type(error: Exception) -> str | None:
-    current: Exception | None = error
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        body = getattr(current, "body", None)
-        if isinstance(body, Mapping):
-            payload = body.get("error", body)
-            if isinstance(payload, Mapping) and isinstance(payload.get("type"), str):
-                return payload["type"]
-        next_error = current.__cause__ or current.__context__
-        current = next_error if isinstance(next_error, Exception) else None
-    return None
-
-
-def _dump(value: Any) -> str:
-    if hasattr(value, "model_dump_json"):
-        return value.model_dump_json()
-    try:
-        return json.dumps(value, ensure_ascii=False, default=str)
-    except TypeError:
-        return str(value)
-
-
-def _usage(result: Any) -> dict[str, Any]:
-    usage = getattr(result, "context_wrapper", None)
-    usage = getattr(usage, "usage", None) or getattr(result, "usage", None)
-    if usage is None:
-        return {}
-    if hasattr(usage, "model_dump"):
-        value = usage.model_dump()
-    elif hasattr(usage, "__dict__"):
-        value = dict(usage.__dict__)
-    else:
-        value = {"value": str(usage)}
-    # SDK versions have returned nested RequestUsage objects from model_dump;
-    # event logs are JSONL and must never fail after a successful API call.
-    try:
-        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
-    except (TypeError, ValueError):
-        return {"value": str(value)}
-
-
-def _reasoning_summary(result: Any) -> str | None:
-    for item in getattr(result, "new_items", ()) or ():
-        raw = getattr(item, "raw_item", None)
-        summary = getattr(raw, "summary", None)
-        if summary:
-            return str(summary)
-    return None
